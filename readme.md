@@ -1,0 +1,7 @@
+该工程为STM32F427IIH的IAP例程；
+
+为ST官方提供的例程，通过使用Ymodem协议与上位机通信；
+
+详细使用方法查看“使用USART实现STM32F40xSTM32F41x的IAP”
+
+上位机可使用SecureCRT，该上位机可使用Ymodem传输文件；
