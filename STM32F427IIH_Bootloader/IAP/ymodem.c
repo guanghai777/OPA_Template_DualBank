@@ -29,6 +29,13 @@
 #include "menu.h"
 
 /* Private typedef -----------------------------------------------------------*/
+typedef enum {
+    STATE_WAIT_HEADER = 0,   // 等待文件头包
+    STATE_RECEIVE_DATA,      // 接收数据包
+    STATE_WAIT_EOT,          // 等待传输结束符
+    STATE_DONE,              // 文件传输完成
+    STATE_ABORT              // 中止
+} YMODEM_StateTypeDef;
 /* Private define ------------------------------------------------------------*/
 #define CRC16_F       /* activate the CRC16 integrity */
 /* Private macro -------------------------------------------------------------*/
@@ -106,7 +113,7 @@ static HAL_StatusTypeDef ReceivePacket(uint8_t *p_data, uint32_t *p_length, uint
       status = HAL_UART_Receive(&UartHandle, &p_data[PACKET_NUMBER_INDEX], packet_size + PACKET_OVERHEAD_SIZE, timeout);
 
       /* Simple packet sanity check */
-      if (status == HAL_OK )
+      if (status == HAL_OK )			//成功接收到数据
       {
         if (p_data[PACKET_NUMBER_INDEX] != ((p_data[PACKET_CNUMBER_INDEX]) ^ NEGATIVE_BYTE)) //包号检查
         {
@@ -290,144 +297,165 @@ uint8_t CalcChecksum(const uint8_t *p_data, uint32_t size)
   */
 COM_StatusTypeDef Ymodem_Receive ( uint32_t *p_size )
 {
-  uint32_t i, packet_length, session_done = 0, file_done, errors = 0, session_begin = 0;
- // uint32_t flashdestination;
-  uint32_t ramsource, filesize, packets_received;
+  uint32_t i, packet_length, errors = 0;
+  uint32_t ramsource, filesize;
+  uint32_t packets_received = 0;
   uint8_t *file_ptr;
   uint8_t file_size[FILE_SIZE_LENGTH], tmp;
   COM_StatusTypeDef result = COM_OK;
+  uint8_t endx = 1;
 
   /* Initialize flashdestination variable */
   flashdestination = APPLICATION_ADDRESS;
+	
+  YMODEM_StateTypeDef state = STATE_WAIT_HEADER;  // 初始状态
+  HAL_StatusTypeDef packet_state = 0;
 
-  while ((session_done == 0) && (result == COM_OK))
+  while ((state != STATE_DONE) && (state != STATE_ABORT))
   {
-    packets_received = 0;
-    file_done = 0;
-    while ((file_done == 0) && (result == COM_OK))
-    {
-      switch (ReceivePacket(aPacketData, &packet_length, DOWNLOAD_TIMEOUT))
-      {
-        case HAL_OK:
-          errors = 0;
-          switch (packet_length)
-          {
-            case 2:
-              /* Abort by sender */
-              Serial_PutByte(ACK);
-              result = COM_ABORT;
-              break;
-            case 0:
-              /* End of transmission */
-              Serial_PutByte(ACK);
-              file_done = 1;
-              break;
-            default:
-              /* Normal packet */
-              if (aPacketData[PACKET_NUMBER_INDEX] != (uint8_t)packets_received)
-              {
-                Serial_PutByte(NAK);
-              }
-              else
-              {
-                if (packets_received == 0)
-                {
-                  /* File name packet */
-                  if (aPacketData[PACKET_DATA_INDEX] != 0)
-                  {
-                    /* File name extraction */
-                    i = 0;
-                    file_ptr = aPacketData + PACKET_DATA_INDEX;
-                    while ( (*file_ptr != 0) && (i < FILE_NAME_LENGTH))
-                    {
-                      aFileName[i++] = *file_ptr++;
-                    }
 
-                    /* File size extraction */
-                    aFileName[i++] = '\0';
-                    i = 0;
-                    file_ptr ++;
-                    while ( (*file_ptr != ' ') && (i < FILE_SIZE_LENGTH))
-                    {
-                      file_size[i++] = *file_ptr++;
-                    }
-                    file_size[i++] = '\0';
-                    Str2Int(file_size, &filesize);
+		packet_state = ReceivePacket(aPacketData, &packet_length, DOWNLOAD_TIMEOUT); //接收数据包
+		switch (state)
+		{
+			
+			case STATE_WAIT_HEADER:
+				if(packet_state == HAL_OK)
+				{
+					  /* File name packet */
+					  if (aPacketData[PACKET_DATA_INDEX] != 0)
+					  {
+						/* File name extraction */
+						i = 0;
+						file_ptr = aPacketData + PACKET_DATA_INDEX;
+						while ( (*file_ptr != 0) && (i < FILE_NAME_LENGTH))
+						{
+						  aFileName[i++] = *file_ptr++;
+						}
 
-                    /* Test the size of the image to be sent */
-                    /* Image size is greater than Flash size */
-                    if (filesize > (USER_FLASH_SIZE + 1))
-                    {
-                      /* End session */
-                      tmp = CA;
-                      HAL_UART_Transmit(&UartHandle, &tmp, 1, NAK_TIMEOUT);
-                      HAL_UART_Transmit(&UartHandle, &tmp, 1, NAK_TIMEOUT);
-                      result = COM_LIMIT;
-                    }
-                    /* erase user application area */
-                    FLASH_If_Erase(APPLICATION_ADDRESS);
-                    *p_size = filesize;
+						/* File size extraction */
+						aFileName[i++] = '\0';
+						i = 0;
+						file_ptr ++;
+						while ( (*file_ptr != ' ') && (i < FILE_SIZE_LENGTH))
+						{
+						  file_size[i++] = *file_ptr++;
+						}
+						file_size[i++] = '\0';
+						Str2Int(file_size, &filesize);
 
-                    Serial_PutByte(ACK);
-                    Serial_PutByte(CRC16);
-                  }
-                  /* File header packet is empty, end session */
-                  else
-                  {
-                    Serial_PutByte(ACK);
-                    file_done = 1;
-                    session_done = 1;
-                    break;
-                  }
-                }
-                else /* Data packet */
-                {
-                  ramsource = (uint32_t) & aPacketData[PACKET_DATA_INDEX];
-                  /* Write received data in Flash */
-                  if (FLASH_If_Write(flashdestination, (uint32_t*) ramsource, packet_length/4) == FLASHIF_OK)
-                  {
-                    flashdestination += packet_length;
-                    Serial_PutByte(ACK);
-                  }
-                  else /* An error occurred while writing to Flash memory */
-                  {
-                    /* End session */
-                    Serial_PutByte(CA);
-                    Serial_PutByte(CA);
-                    result = COM_DATA;
-                  }
-                }
-                packets_received ++;
-                session_begin = 1;
-              }
-              break;
-          }
-          break;
-        case HAL_BUSY: /* Abort actually */
-          Serial_PutByte(CA);
-          Serial_PutByte(CA);
-          result = COM_ABORT;
-          break;
-        default:
-          if (session_begin > 0)
-          {
-            errors ++;
-          }
-          if (errors > MAX_ERRORS)
-          {
-            /* Abort communication */
-            Serial_PutByte(CA);
-            Serial_PutByte(CA);
-          }
-          else
-          {
-            Serial_PutByte(CRC16); /* Ask for a packet */
-          }
-          break;
-      }
-    }
-  }
-  return result;
+						/* Test the size of the image to be sent */
+						/* Image size is greater than Flash size */
+						if (filesize > (USER_FLASH_SIZE + 1))
+						{
+						  /* End session */
+						  tmp = CA;
+						  HAL_UART_Transmit(&UartHandle, &tmp, 1, NAK_TIMEOUT);
+						  HAL_UART_Transmit(&UartHandle, &tmp, 1, NAK_TIMEOUT);
+						  result = COM_LIMIT;
+						}
+						/* erase user application area */
+						FLASH_If_Erase(APPLICATION_ADDRESS);
+						*p_size = filesize;
+
+						Serial_PutByte(ACK);
+						Serial_PutByte(CRC16);
+						
+						packets_received++;
+						state = STATE_RECEIVE_DATA;
+					  }
+					  /* File header packet is empty, end session */
+					  else
+					  {
+						Serial_PutByte(NAK);
+					  }
+				}
+				else if(packet_state == HAL_TIMEOUT)
+				{
+					Serial_PutByte(CRC16); /* Ask for a packet */
+				}
+				else
+				{
+					;  //接收错误
+				}
+				break;
+			
+			case STATE_RECEIVE_DATA:
+				if(packet_state == HAL_OK)
+				{
+					if(aPacketData[PACKET_NUMBER_INDEX] != (uint8_t)packets_received)
+					{
+						Serial_PutByte(NAK);
+					}
+					else
+					{
+						ramsource = (uint32_t) & aPacketData[PACKET_DATA_INDEX];
+						/* Write received data in Flash */
+						if (FLASH_If_Write(flashdestination, (uint32_t*) ramsource, packet_length/4) == FLASHIF_OK)
+						{
+							flashdestination += packet_length;
+							if(filesize <= (flashdestination - APPLICATION_ADDRESS))
+							{
+								state = STATE_WAIT_EOT;
+							}
+							Serial_PutByte(ACK);
+						}
+						else /* An error occurred while writing to Flash memory */
+						{
+							/* End session */
+							Serial_PutByte(CA);
+							Serial_PutByte(CA);
+							result = COM_DATA;
+							state = STATE_ABORT;
+						}
+						packets_received++;
+					}
+				}
+				else
+				{
+					/* 超时或错误 */
+					errors++;
+					if (errors > MAX_ERRORS)
+					{
+						Serial_PutByte(CA);
+						Serial_PutByte(CA);
+						state = STATE_ABORT;
+					}
+					else
+					{
+						Serial_PutByte(NAK);
+					}
+				}
+				break;
+				
+			case STATE_WAIT_EOT:
+				if((packet_state == HAL_OK) && (packet_length == 0))
+				{
+					if(endx == 1)
+					{
+						endx++;
+						Serial_PutByte(NAK);
+					}
+					else{
+						Serial_PutByte(ACK);
+						state = STATE_DONE;
+					}
+				}
+				else
+				{
+					Serial_PutByte(CA);
+					Serial_PutByte(CA);
+					state = STATE_DONE;				
+				}
+				break;
+				
+			default:
+				/* 不应该到这里，保险处理 */
+				state = STATE_ABORT;
+				result = COM_ABORT;
+				break;
+		  }
+	}
+	return result;
 }
 
 /**

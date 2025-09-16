@@ -48,8 +48,8 @@
 /* UART handler declaration */
 UART_HandleTypeDef UartHandle;
 
-extern pFunction Jump_To_Application;
-extern uint32_t JumpAddress;
+pFunction Jump_To_Application;
+uint32_t Jump_Address;
 
 /* USER CODE END PV */
 
@@ -110,8 +110,8 @@ int main(void)
 		if(((*(__IO uint32_t*)APPLICATION_ADDRESS) & 0x2FFE0000 ) == 0x20000000)
 		{
 			/* Jump to user application */
-			JumpAddress = *(__IO uint32_t*) (APPLICATION_ADDRESS + 4);
-			Jump_To_Application = (pFunction) JumpAddress;
+			Jump_Address = *(__IO uint32_t*) (APPLICATION_ADDRESS + 4);
+			Jump_To_Application = (pFunction) Jump_Address;
 			/* Initialize user application's Stack Pointer */
 			__set_MSP(*(__IO uint32_t*) APPLICATION_ADDRESS);
 			Jump_To_Application();

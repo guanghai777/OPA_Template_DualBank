@@ -30,6 +30,11 @@ extern uint8_t aFileName[FILE_NAME_LENGTH];
 typedef  void (*pFunction)(void);
 
 /* Exported types ------------------------------------------------------------*/
+typedef enum{
+	DOWNLOAD_OK = 0,
+	DOWNLOAD_ERROR
+} Download_StatusTypeDef;
+
 /* Exported constants --------------------------------------------------------*/
 /* Exported macro ------------------------------------------------------------*/
 /* Exported functions ------------------------------------------------------- */
